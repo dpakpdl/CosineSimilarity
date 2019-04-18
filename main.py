@@ -41,9 +41,12 @@ def get_matched_summaries():
 
 def get_lines_from_paragraph(paragraph):
     words_output = list()
-    for line in paragraph.split(". "):
+    lines = list()
+    splitted_sentences = re.split(r'(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?)\s', paragraph)
+    for line in splitted_sentences:
         words_output.append(remove_articles_preposition(line.strip()))
-    return words_output
+        lines.append(line.strip())
+    return words_output, lines
 
 
 def remove_articles_preposition(sentence):
@@ -70,7 +73,7 @@ def read_file(filepath):
     sentences = sent_detector.tokenize(content.strip())
 
     # remove sentences not ending with full stop
-    sentences = [re.sub('\s+', ' ', sentence) for sentence in sentences if sentence[-1] is '.']
+    sentences = [re.sub('\s+', ' ', sentence) for sentence in sentences if sentence[-1] is '.' or sentence[-1] is '?']
     return sentences
 
 
@@ -86,7 +89,7 @@ def calculate_word_vector_count(summary_word_vector, non_summary_wordvector):
             cosine.append(get_cosine_similarity(summary_count_vector, non_summary_count_vector))
         total_score.append(max(cosine))
     total = get_average_similarity(total_score)
-    return total
+    return total, total_score
 
 
 def get_average_similarity(total):
@@ -94,7 +97,8 @@ def get_average_similarity(total):
 
 
 def get_cosine_similarity(summary_count_vector, non_summary_count_vector):
-    cosine_value = spatial.distance.cosine(summary_count_vector, non_summary_count_vector)
+    # 1-(1-cos(Theta)) dont get confused here
+    cosine_value = 1 - spatial.distance.cosine(summary_count_vector, non_summary_count_vector)
     if cosine_value >= 0.90:
         result = 1
     else:
@@ -139,16 +143,24 @@ def add_rows_to_output_csv(output_rows):
             writer.writerows(all_rows)
 
 
+def make_raw_files(filename, non_summary_identity, line_wise_similarity, summary_lines):
+    header = ["adsh", "non_summary_file" "sentence", "similarity"]
+    with open('Raw/' + filename + ".csv", 'w') as myfile:
+        wr = csv.writer(myfile, quoting=csv.QUOTE_ALL)
+        wr.writerow(header)
+        all_rows = []
+        for index, line in enumerate(summary_lines):
+            all_rows.append([filename, non_summary_identity, line, line_wise_similarity[index]])
+        wr.writerows(all_rows)
+
+
 def main():
     output_rows = list()
     new_mapping, mapping, summaries = get_matched_summaries()
-    counter = 0
     for index, row in new_mapping.iterrows():
-        counter += 1
         summary_file_identity, non_summary_file_identity = row['accession_xbrl'], row['accession_not_xbrl']
         full_summary = summaries.loc[summaries["adsh"] == summary_file_identity, 'full_summary'].iloc[0]
-
-        summary_word_vector = get_lines_from_paragraph(full_summary)
+        summary_word_vector, summary_lines = get_lines_from_paragraph(full_summary)
 
         number_of_summary_lines = len(summary_word_vector)
         non_summary_file_path = os.path.join(ATTACHMENT_PATH, "Non-Summaries", non_summary_file_identity + '.txt')
@@ -160,13 +172,14 @@ def main():
         for non_summary_line in non_summary_lines:
             non_summary_word_vector.append(remove_articles_preposition(non_summary_line))
 
-        similarity = calculate_word_vector_count(summary_word_vector, non_summary_word_vector)
+        total_similarity, line_wise_similarity = calculate_word_vector_count(summary_word_vector,
+                                                                             non_summary_word_vector)
+        make_raw_files(summary_file_identity, non_summary_file_identity, line_wise_similarity, summary_lines)
+
         output_rows.append(dict(summary_indentifier=summary_file_identity,
-                                similarity=similarity,
+                                similarity=total_similarity,
                                 number_of_sentences_in_summary=number_of_summary_lines,
                                 number_of_sentences_in_non_summary=number_of_non_summary_lines))
-        if counter >= 10:
-            break
     print(output_rows)
     add_rows_to_output_csv(output_rows)
 
